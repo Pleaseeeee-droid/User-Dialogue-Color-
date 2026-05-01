@@ -1,40 +1,156 @@
-// ============================================================
-//  User Dialogue Color — SillyTavern Extension
-//  Wraps "quoted dialogue" in user messages with <font color>
-// ============================================================
+import { eventSource, event_types, saveChat, chat } from "../../../script.js";
+import { extension_settings, saveSettingsDebounced } from "../../extensions.js";
 
-import { eventSource, event_types } from "../../../script.js";
-import {
-    extension_settings,
-    getContext,
-    saveSettingsDebounced,
-} from "../../extensions.js";
-
-// ── Constants ──────────────────────────────────────────────
 const EXT_NAME = "user-dialogue-color";
 
-// Default settings loaded on first install
 const DEFAULT_SETTINGS = {
     enabled: true,
-    color: "#FF6B6B",                                     // active color
-    savedColors: [                                         // preloaded palette
-        "#FF6B6B",  // coral red
-        "#FF69B4",  // hot pink
-        "#FFD700",  // gold
-        "#6BFFB8",  // mint green
-        "#6BB5FF",  // sky blue
-        "#C084FC",  // purple
-        "#FFA07A",  // light salmon
-        "#00CED1",  // dark turquoise
-    ],
+    color: "#FF6B6B",
+    savedColors: ["#FF6B6B","#FF69B4","#FFD700","#6BFFB8","#6BB5FF","#C084FC"],
 };
 
-// ── Settings helpers ───────────────────────────────────────
 function initSettings() {
-    // Create settings block if it doesn't exist yet
     if (!extension_settings[EXT_NAME]) {
-        extension_settings[EXT_NAME] = structuredClone(DEFAULT_SETTINGS);
+        extension_settings[EXT_NAME] = Object.assign({}, DEFAULT_SETTINGS);
     }
+}
+
+function S() {
+    return extension_settings[EXT_NAME];
+}
+
+function colorize(text, color) {
+    return text.replace(/"([^"]+)"/g, `<font color="${color}">"$1"</font>`);
+}
+
+function onMessageSent() {
+    try {
+        if (!S().enabled) return;
+        if (!chat || chat.length === 0) return;
+
+        for (let i = chat.length - 1; i >= 0; i--) {
+            if (!chat[i].is_user) continue;
+            const msg = chat[i];
+            const updated = colorize(msg.mes, S().color);
+            if (updated === msg.mes) break;
+            msg.mes = updated;
+            $(`.mes[mesid="${i}"] .mes_text`).html(updated);
+            saveChat();
+            break;
+        }
+    } catch (e) {
+        console.error(`[${EXT_NAME}] error:`, e);
+    }
+}
+
+function renderSwatches() {
+    const $el = $(`#${EXT_NAME}-swatches`).empty();
+    S().savedColors.forEach((hex, i) => {
+        const active = hex === S().color;
+        $el.append(`<div class="${EXT_NAME}-swatch"
+            data-color="${hex}" data-index="${i}" title="${hex}"
+            style="width:30px;height:30px;border-radius:50%;background:${hex};
+                   cursor:pointer;display:inline-block;margin:2px;
+                   border:3px solid ${active ? "#fff" : "transparent"};
+                   box-shadow:0 0 0 1.5px #666;"></div>`);
+    });
+}
+
+function setColor(hex) {
+    if (!/^#[0-9A-Fa-f]{6}$/.test(hex)) return;
+    S().color = hex;
+    $(`#${EXT_NAME}-picker`).val(hex);
+    $(`#${EXT_NAME}-hex`).val(hex);
+    $(`#${EXT_NAME}-preview`).attr("color", hex);
+    renderSwatches();
+    saveSettingsDebounced();
+}
+
+function buildUI() {
+    const s = S();
+    const html = `
+<div class="inline-drawer">
+    <div class="inline-drawer-toggle inline-drawer-header">
+        <b>🎨 User Dialogue Color</b>
+        <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+    </div>
+    <div class="inline-drawer-content">
+        <label class="checkbox_label">
+            <input type="checkbox" id="${EXT_NAME}-enabled" ${s.enabled ? "checked" : ""}/>
+            &nbsp;Enable dialogue colorization
+        </label>
+        <hr>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0;">
+            <input type="color" id="${EXT_NAME}-picker" value="${s.color}"
+                   style="width:44px;height:34px;border:none;padding:2px;cursor:pointer;border-radius:4px;"/>
+            <input type="text" id="${EXT_NAME}-hex" value="${s.color}"
+                   class="text_pole" maxlength="7"
+                   style="width:90px;font-family:monospace;"/>
+            <button id="${EXT_NAME}-save" class="menu_button">Save Color</button>
+        </div>
+        <div id="${EXT_NAME}-swatches" style="margin:6px 0;min-height:36px;"></div>
+        <small style="opacity:.6;">Right-click a swatch to remove it</small>
+        <div style="margin-top:10px;padding:8px;background:rgba(0,0,0,.3);border-radius:6px;">
+            Preview: <font id="${EXT_NAME}-preview" color="${s.color}">"Hello there!"</font>
+        </div>
+    </div>
+</div>`;
+
+    $("#extensions_settings").append(html);
+    renderSwatches();
+
+    $(`#${EXT_NAME}-enabled`).on("change", function () {
+        S().enabled = this.checked;
+        saveSettingsDebounced();
+    });
+
+    $(`#${EXT_NAME}-picker`).on("input", function () {
+        $(`#${EXT_NAME}-hex`).val(this.value);
+        $(`#${EXT_NAME}-preview`).attr("color", this.value);
+    }).on("change", function () {
+        setColor(this.value);
+    });
+
+    $(`#${EXT_NAME}-hex`).on("change", function () {
+        let v = this.value.trim();
+        if (!v.startsWith("#")) v = "#" + v;
+        setColor(v);
+    });
+
+    $(`#${EXT_NAME}-save`).on("click", function () {
+        let v = $(`#${EXT_NAME}-hex`).val().trim();
+        if (!v.startsWith("#")) v = "#" + v;
+        if (!/^#[0-9A-Fa-f]{6}$/.test(v)) return;
+        if (!S().savedColors.includes(v)) S().savedColors.push(v);
+        setColor(v);
+    });
+
+    $(document).on("click", `.${EXT_NAME}-swatch`, function () {
+        setColor($(this).data("color"));
+    });
+
+    $(document).on("contextmenu", `.${EXT_NAME}-swatch`, function (e) {
+        e.preventDefault();
+        const idx = +$(this).data("index");
+        const colors = S().savedColors;
+        if (colors.length <= 1) return;
+        colors.splice(idx, 1);
+        if (S().color === $(this).data("color")) setColor(colors[0]);
+        renderSwatches();
+        saveSettingsDebounced();
+    });
+}
+
+jQuery(async () => {
+    try {
+        initSettings();
+        buildUI();
+        eventSource.on(event_types.MESSAGE_SENT, onMessageSent);
+        console.log(`[${EXT_NAME}] loaded ✓`);
+    } catch (e) {
+        console.error(`[${EXT_NAME}] failed to load:`, e);
+    }
+});    }
     // Fill in any keys added in future updates
     for (const [key, val] of Object.entries(DEFAULT_SETTINGS)) {
         if (extension_settings[EXT_NAME][key] === undefined) {
